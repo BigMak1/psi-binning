@@ -1,13 +1,3 @@
-"""Графики plotly для PSI-анализа (поверх нового psi.py).
-
-    plot_bin_distribution(df, feature)  — линии долей бинов по периодам (линия на бин)
-    plot_psi(df, feature)               — линия PSI по периодам с порогами
-    plot_feature(df, feature)           — два графика вместе (распределение + PSI)
-
-Каждая функция сама обучает биннер на базе (define_base_data) и применяет ко всей выборке.
-Параметры повторяют psi.py: is_category (тип фичи), binner_* (как бить), psi_*/psi_base_* (база и расчёт).
-"""
-
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -15,17 +5,21 @@ from plotly.subplots import make_subplots
 from binning import CatBinner, NumBinner
 from psi import calc_psi_by_period, define_base_data
 
-# пороги интерпретации PSI
+# Пороги интерпретации PSI.
 PSI_WARN = 0.10
 PSI_ALERT = 0.25
 
 
-def _base_caption(psi_base_size: float | None, psi_base_shift_size: float, psi_base_mask_col: str | None) -> str:
+def _base_caption(
+    psi_base_size: float | None, psi_base_shift_size: float, psi_base_mask_col: str | None
+) -> str:
+    """Формирует подпись об источнике базы для заголовка графика."""
     if psi_base_mask_col is not None:
         return f"база: {psi_base_mask_col}"
     if psi_base_size is None:
         return "база: вся выборка"
-    return f"база: {psi_base_size:.0%}" + (f" (сдвиг {psi_base_shift_size:.0%})" if psi_base_shift_size else "")
+    shift = f" (сдвиг {psi_base_shift_size:.0%})" if psi_base_shift_size else ""
+    return f"база: {psi_base_size:.0%}{shift}"
 
 
 def _fit_binner(
@@ -33,20 +27,25 @@ def _fit_binner(
     binner_n_bins, binner_min_bin, binner_point_share,
     psi_date_col, psi_base_size, psi_base_shift_size, psi_base_mask_col,
 ):
-    """Выбрать базу, обучить биннер на ней, применить ко всей выборке. -> (binned_feature, base_mask)."""
+    """Выбирает базу, обучает биннер на ней и применяет ко всей выборке.
+
+    Returns:
+        Кортеж (binned_feature, base_mask).
+    """
     base_mask = define_base_data(df, date_col=psi_date_col, base_size=psi_base_size,
                                  shift_size=psi_base_shift_size, mask_col=psi_base_mask_col)
     binner = (CatBinner(min_bin=binner_min_bin) if is_category
-              else NumBinner(n_bins=binner_n_bins, min_bin=binner_min_bin, point_share=binner_point_share))
+              else NumBinner(n_bins=binner_n_bins, min_bin=binner_min_bin,
+                             point_share=binner_point_share))
     binner.fit(df.loc[base_mask, feature])
     return binner.transform(df[feature]), base_mask
 
 
 def _bin_shares(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
-    """Доли бинов по периодам: index=bin (в порядке категорий), columns=period.
+    """Считает доли бинов по периодам (индекс — бин, колонки — период).
 
-    Группируем по самой Categorical (через crosstab по кодам), а не по object — смешанные
-    бины (Interval/float/str) несравнимы, обычная сортировка по ним падает.
+    Группировка идёт по самой категориальной Series (через crosstab по кодам): смешанные
+    бины (Interval/число/строка) несравнимы, обычная сортировка по ним падает.
     """
     share = pd.crosstab(binned_feature, periods, normalize="columns")
     order = [b for b in binned_feature.cat.categories if b in share.index]
@@ -56,14 +55,22 @@ def _bin_shares(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
 def plot_bin_distribution(
     df, feature, *, is_category=False,
     binner_n_bins=10, binner_min_bin="auto", binner_point_share=0.10,
-    psi_date_col="sample_month", psi_base_size=None, psi_base_shift_size=0.0, psi_base_mask_col=None,
+    psi_date_col="sample_month", psi_base_size=None,
+    psi_base_shift_size=0.0, psi_base_mask_col=None,
 ) -> go.Figure:
-    """Линии долей бинов по периодам — по линии на каждый бин."""
+    """Строит линии долей бинов по периодам — по линии на каждый бин.
+
+    Параметры биннинга и выбора базы совпадают с ``psi.calc_psi_by_features``.
+
+    Returns:
+        Figure plotly с линиями долей бинов.
+    """
     binned_feature, _ = _fit_binner(
         df, feature, is_category=is_category,
-        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin, binner_point_share=binner_point_share,
-        psi_date_col=psi_date_col, psi_base_size=psi_base_size,
-        psi_base_shift_size=psi_base_shift_size, psi_base_mask_col=psi_base_mask_col,
+        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin,
+        binner_point_share=binner_point_share, psi_date_col=psi_date_col,
+        psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
+        psi_base_mask_col=psi_base_mask_col,
     )
     share = _bin_shares(binned_feature, pd.Series(df[psi_date_col].to_numpy()))
     periods = list(share.columns)
@@ -80,15 +87,23 @@ def plot_bin_distribution(
 def plot_psi(
     df, feature, *, is_category=False,
     binner_n_bins=10, binner_min_bin="auto", binner_point_share=0.10,
-    psi_date_col="sample_month", psi_base_size=None, psi_base_shift_size=0.0, psi_base_mask_col=None,
+    psi_date_col="sample_month", psi_base_size=None,
+    psi_base_shift_size=0.0, psi_base_mask_col=None,
     psi_alpha=0.5,
 ) -> go.Figure:
-    """Линия PSI по периодам с порогами 0.10 / 0.25."""
+    """Строит линию PSI по периодам с порогами 0.10 / 0.25.
+
+    Параметры биннинга и выбора базы совпадают с ``psi.calc_psi_by_features``.
+
+    Returns:
+        Figure plotly с линией PSI и линиями порогов.
+    """
     binned_feature, base_mask = _fit_binner(
         df, feature, is_category=is_category,
-        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin, binner_point_share=binner_point_share,
-        psi_date_col=psi_date_col, psi_base_size=psi_base_size,
-        psi_base_shift_size=psi_base_shift_size, psi_base_mask_col=psi_base_mask_col,
+        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin,
+        binner_point_share=binner_point_share, psi_date_col=psi_date_col,
+        psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
+        psi_base_mask_col=psi_base_mask_col,
     )
     psi = calc_psi_by_period(df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha)
     fig = go.Figure()
@@ -107,19 +122,27 @@ def plot_psi(
 def plot_feature(
     df, feature, *, is_category=False,
     binner_n_bins=10, binner_min_bin="auto", binner_point_share=0.10,
-    psi_date_col="sample_month", psi_base_size=None, psi_base_shift_size=0.0, psi_base_mask_col=None,
+    psi_date_col="sample_month", psi_base_size=None,
+    psi_base_shift_size=0.0, psi_base_mask_col=None,
     psi_alpha=0.5, height=640,
 ) -> go.Figure:
-    """Комбо: сверху доли бинов (линии), снизу PSI по периодам."""
+    """Строит комбинированный график: сверху доли бинов, снизу PSI по периодам.
+
+    Параметры биннинга и выбора базы совпадают с ``psi.calc_psi_by_features``.
+
+    Returns:
+        Figure plotly из двух подграфиков (распределение и PSI).
+    """
     binned_feature, base_mask = _fit_binner(
         df, feature, is_category=is_category,
-        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin, binner_point_share=binner_point_share,
-        psi_date_col=psi_date_col, psi_base_size=psi_base_size,
-        psi_base_shift_size=psi_base_shift_size, psi_base_mask_col=psi_base_mask_col,
+        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin,
+        binner_point_share=binner_point_share, psi_date_col=psi_date_col,
+        psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
+        psi_base_mask_col=psi_base_mask_col,
     )
     share = _bin_shares(binned_feature, pd.Series(df[psi_date_col].to_numpy()))
     psi = calc_psi_by_period(df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha)
-    psi = psi.reindex(share.columns)   # выровнять по той же оси периодов, что и распределение
+    psi = psi.reindex(share.columns)  # выровнять по той же оси периодов, что и распределение
     periods = list(share.columns)
     cap = _base_caption(psi_base_size, psi_base_shift_size, psi_base_mask_col)
 

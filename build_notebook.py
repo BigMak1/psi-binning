@@ -1,10 +1,3 @@
-"""
-Сборка ноутбука psi_playground.ipynb из кода (через nbformat).
-
-Запуск:  .venv/bin/python build_notebook.py [output.ipynb]
-По умолчанию пишет в psi_playground.ipynb (ОСТОРОЖНО: перезапишет ручные правки).
-Передай свой путь, чтобы собрать копию: .venv/bin/python build_notebook.py /tmp/preview.ipynb
-"""
 import sys
 
 import nbformat as nbf
@@ -138,8 +131,10 @@ cells.append(code(
     "psi_tbl = psi.calc_psi_by_features(df, FEATURES, cat_features=CATEGORICAL, psi_base_size=0.2)\n"
     "\n"
     "def _hl(v):\n"
-    "    if v >= psi_plots.PSI_ALERT: return 'background-color:#f8b4b4'  # >=0.25 alert\n"
-    "    if v >= psi_plots.PSI_WARN:  return 'background-color:#fde68a'  # >=0.10 warn\n"
+    "    if v >= psi_plots.PSI_ALERT:\n"
+    "        return 'background-color:#f8b4b4'  # >=0.25 alert\n"
+    "    if v >= psi_plots.PSI_WARN:\n"
+    "        return 'background-color:#fde68a'  # >=0.10 warn\n"
     "    return ''\n"
     "\n"
     "psi_tbl.round(4).style.map(_hl)"

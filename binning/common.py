@@ -1,21 +1,29 @@
-"""Общие хелперы бининга: приведение входа и авто-порог редкого бина."""
-
 import numpy as np
 import pandas as pd
 
-# Служебные бины (дефолтные метки, не параметры)
+# Метки служебных бинов (значения по умолчанию, не параметры).
 NAN_BIN = "missing"
 OTHER_BIN = "other"
 
-# Авто-порог min_bin: clip(AUTO_MIN_FRACTION * n_reference, AUTO_MIN_FLOOR, AUTO_MIN_CEIL).
-# Считается ОТ РАЗМЕРА REFERENCE: на мелких выборках мягко, на больших — не выкидывает надёжные группы.
+# Авто-порог min_bin: clip(AUTO_MIN_FRACTION * n, AUTO_MIN_FLOOR, AUTO_MIN_CEIL). Считается от
+# размера reference: на малых выборках мягкий, на больших не отбрасывает надёжные группы.
 AUTO_MIN_FRACTION = 0.01
 AUTO_MIN_FLOOR = 20
 AUTO_MIN_CEIL = 1000
 
 
 def as_1d(X) -> pd.Series:
-    """Привести вход к 1D Series: DataFrame одной колонки / Series / 1D-массив / список."""
+    """Приводит вход к одномерной Series.
+
+    Args:
+        X: DataFrame с одной колонкой, Series, одномерный массив или список.
+
+    Returns:
+        Входные данные в виде Series.
+
+    Raises:
+        ValueError: Если в DataFrame больше одной колонки или массив не одномерный.
+    """
     if isinstance(X, pd.DataFrame):
         if X.shape[1] != 1:
             raise ValueError(f"ожидается одна фича, в DataFrame {X.shape[1]} колонок")
@@ -31,12 +39,19 @@ def as_1d(X) -> pd.Series:
 
 
 def resolve_min_count(min_bin: int | float | str | None, n: int) -> int:
-    """min_bin -> абсолютный порог наблюдений на бин.
+    """Преобразует параметр min_bin в абсолютный порог наблюдений на бин.
 
-    "auto"      — clip(AUTO_MIN_FRACTION * n, AUTO_MIN_FLOOR, AUTO_MIN_CEIL)
-    int >= 1    — абсолютное значение
-    float (0,1) — доля от n
-    None / 0    — порог выключен
+    Args:
+        min_bin: Правило порога: ``"auto"`` — clip(AUTO_MIN_FRACTION * n, пол, потолок);
+            целое >= 1 — абсолютное значение; float из (0, 1) — доля от ``n``;
+            ``None`` или 0 — порог отключён.
+        n: Размер выборки, от которого считается порог.
+
+    Returns:
+        Абсолютный порог наблюдений на бин.
+
+    Raises:
+        ValueError: Если ``min_bin`` задан неизвестной строкой.
     """
     if not min_bin:
         return 0

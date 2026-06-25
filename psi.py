@@ -1,20 +1,3 @@
-"""Расчёт PSI по периодам поверх биннеров (NumBinner / CatBinner).
-
-PSI = sum_i (actual_i - expected_i) * ln(actual_i / expected_i).
-Пороги: < 0.10 стабильно, 0.10..0.25 — сдвиг, > 0.25 — сильный сдвиг.
-
-Иерархия (сверху вниз):
-    calc_psi_by_features  — PSI по периодам для набора фичей (оркестратор: база -> биннинг -> PSI)
-    calc_psi_by_period    — PSI каждого периода относительно базы для одной фичи
-    define_base_data      — выбор базы (reference): булева маска строк
-    _psi_laplace          — PSI из counts, сглаживание Лапласа (используется по умолчанию)
-    _psi_epsilon          — PSI из counts, epsilon-клиппинг (альтернатива)
-
-Параметры calc_psi_by_features сгруппированы префиксами:
-    binner_*    — как бить на бины (идут в NumBinner / CatBinner)
-    psi_base_*  — как выбрать базу (идут в define_base_data)
-"""
-
 import numpy as np
 import pandas as pd
 
@@ -35,11 +18,27 @@ def calc_psi_by_features(
     binner_min_bin: int | float | str | None = "auto",
     binner_point_share: float = 0.10,
 ) -> pd.DataFrame:
-    """PSI по периодам для набора фичей. -> DataFrame: index=period, columns=features.
+    """Вычисляет PSI по периодам для набора фичей.
 
-    Для КАЖДОЙ фичи: биннер (CatBinner если фича в cat_features, иначе NumBinner)
-    обучается на базе и применяется ко всей выборке; затем считаем PSI каждого периода
-    относительно базы. База выбирается один раз (define_base_data) и общая для всех фичей.
+    Для каждой фичи биннер (``CatBinner`` если фича в ``cat_features``, иначе ``NumBinner``)
+    обучается на базе и применяется ко всей выборке, после чего считается PSI каждого периода
+    относительно базы. База выбирается один раз и общая для всех фичей.
+
+    Args:
+        df: Исходный датафрейм.
+        features: Имена фичей для расчёта.
+        cat_features: Имена категориальных фичей; ``None`` — все фичи числовые.
+        psi_date_col: Колонка периода; она же задаёт ось окна базы (см. ``define_base_data``).
+        psi_alpha: Параметр сглаживания Лапласа.
+        psi_base_size: Доля строк в базе; ``None`` — вся выборка.
+        psi_base_shift_size: Сдвиг окна базы по времени (доля).
+        psi_base_mask_col: Имя готовой булевой колонки базы (приоритет над size/shift).
+        binner_n_bins: Число квантильных интервалов (для числовых фичей).
+        binner_min_bin: Порог редкого бина (см. ``resolve_min_count``).
+        binner_point_share: Порог доли для выделения точечного бина (для числовых фичей).
+
+    Returns:
+        DataFrame со значениями PSI: индекс — период, колонки — фичи.
     """
     base_mask = define_base_data(
         df,
@@ -48,7 +47,7 @@ def calc_psi_by_features(
         shift_size=psi_base_shift_size,
         mask_col=psi_base_mask_col,
     )
-    cat_features = set(cat_features or [])   # нет категориальных -> пустое множество, все фичи числовые
+    cat_features = set(cat_features or [])  # пусто -> все фичи числовые
 
     psi_by_feature = {}
     for feature in features:
@@ -60,9 +59,11 @@ def calc_psi_by_features(
                 min_bin=binner_min_bin,
                 point_share=binner_point_share,
             )
-        binner.fit(df.loc[base_mask, feature])             # учим границы только на базе
-        binned_feature = binner.transform(df[feature])          # применяем ко всей выборке
-        psi_by_feature[feature] = calc_psi_by_period(df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha)
+        binner.fit(df.loc[base_mask, feature])  # учим границы только на базе
+        binned_feature = binner.transform(df[feature])  # применяем ко всей выборке
+        psi_by_feature[feature] = calc_psi_by_period(
+            df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha
+        )
 
     return pd.DataFrame(psi_by_feature)
 
@@ -75,14 +76,20 @@ def calc_psi_by_period(
     *,
     alpha: float = 0.5,
 ) -> pd.Series:
-    """PSI каждого периода относительно базы для одной фичи. -> Series: index=period, value=PSI.
+    """Вычисляет PSI каждого периода относительно базового распределения.
 
-    df             — исходный датафрейм (из него берём колонку периода psi_date_col).
-    binned_feature — категориальная Series бинов (выход transform), выровнена ПО ПОЗИЦИИ с df.
-    psi_date_col   — имя колонки периода в df (напр. "sample_month").
-    base_mask      — булева маска базы той же длины: expected = распределение бинов на базе.
+    Args:
+        df: Исходный датафрейм; из него берётся колонка периода.
+        binned_feature: Категориальная Series бинов (результат transform), выровненная
+            по позиции с ``df``.
+        psi_date_col: Имя колонки периода в ``df`` (например, ``"sample_month"``).
+        base_mask: Булева маска базовых строк той же длины, что и ``df``.
+        alpha: Параметр сглаживания Лапласа.
+
+    Returns:
+        Series со значениями PSI, индексированная и отсортированная по периоду.
     """
-    expected = binned_feature[base_mask].value_counts().to_dict()   # распределение бинов на базе
+    expected = binned_feature[base_mask].value_counts().to_dict()
 
     psi = {}
     for period, period_bins in binned_feature.groupby(df[psi_date_col].to_numpy()):
@@ -100,18 +107,24 @@ def define_base_data(
     shift_size: float = 0.0,
     mask_col: str | None = None,
 ) -> np.ndarray:
-    """Булева (позиционная) маска строк базы (reference) для PSI.
+    """Строит булеву (позиционную) маску строк базы (reference).
 
-    mask_col   — если задан, берём готовую bool-колонку из df (приоритет над остальным).
-    base_size  — доля строк в базе по сортировке date_col; None -> вся выборка.
-    shift_size — сдвиг окна базы по времени (доля): окно строк [shift, shift + base];
-                 позволяет пропустить проблемные ранние периоды.
+    Args:
+        df: Исходный датафрейм.
+        date_col: Колонка даты, по которой сортируется окно базы.
+        base_size: Доля строк в базе; ``None`` — вся выборка.
+        shift_size: Сдвиг окна базы по времени (доля): окно строк [shift, shift + base];
+            позволяет пропустить проблемные ранние периоды.
+        mask_col: Имя готовой булевой колонки базы (приоритет над остальными параметрами).
 
-    Примеры:
-        define_base_data(df)                                -> вся выборка
-        define_base_data(df, base_size=0.2)                 -> первые 20% по дате
-        define_base_data(df, base_size=0.2, shift_size=0.2) -> вторые 20% (с 20% по 40%)
-        define_base_data(df, mask_col="is_base")            -> готовая разметка пользователя
+    Returns:
+        Булева маска строк базы той же длины, что и ``df``.
+
+    Examples:
+        define_base_data(df)                                 -> вся выборка
+        define_base_data(df, base_size=0.2)                  -> первые 20% по дате
+        define_base_data(df, base_size=0.2, shift_size=0.2)  -> вторые 20% (с 20% по 40%)
+        define_base_data(df, mask_col="is_base")             -> готовая разметка
     """
     n = len(df)
     if mask_col is not None:
@@ -127,12 +140,21 @@ def define_base_data(
 
 
 def _psi_laplace(expected: dict, actual: dict, alpha: float = 0.5) -> float:
-    """PSI между распределениями бинов; expected/actual — словари bin -> COUNT.
+    """Вычисляет PSI между распределениями бинов со сглаживанием Лапласа.
 
-    Сглаживание Лапласа: доля = (count + alpha) / (N + alpha * B). Убирает нули/деление-на-ноль
-    статистически корректно; при больших N влияние alpha ничтожно. alpha=0.5 — Джеффрис.
+    Доля бина = (count + alpha) / (N + alpha * B). Сглаживание убирает нули и деление на ноль;
+    при больших N влияние alpha ничтожно. alpha = 0.5 соответствует приору Джеффриса.
+
+    Args:
+        expected: Базовое распределение, словарь bin -> count.
+        actual: Сравниваемое распределение, словарь bin -> count.
+        alpha: Параметр сглаживания Лапласа.
+
+    Returns:
+        Значение PSI.
     """
-    bins = sorted(set(expected) | set(actual), key=str)   # ключи-бины разнотипны (Interval/число/str)
+    # Ключи-бины разнотипны (Interval / число / строка), поэтому сортируем по строковому виду.
+    bins = sorted(set(expected) | set(actual), key=str)
     num_bins = len(bins)
     expected = np.array([expected.get(k, 0.0) for k in bins], dtype=float)
     actual = np.array([actual.get(k, 0.0) for k in bins], dtype=float)
@@ -142,10 +164,18 @@ def _psi_laplace(expected: dict, actual: dict, alpha: float = 0.5) -> float:
 
 
 def _psi_epsilon(expected: dict, actual: dict, eps: float = 1e-6) -> float:
-    """PSI между распределениями бинов; expected/actual — словари bin -> COUNT.
+    """Вычисляет PSI между распределениями бинов с epsilon-клиппингом.
 
-    Классический epsilon-вариант: доли считаем напрямую и поднимаем до eps (clip),
-    чтобы убрать log(0)/деление на ноль. Альтернатива Лапласу (_psi_laplace).
+    Доли считаются напрямую и поднимаются до ``eps`` (clip), чтобы убрать log(0) и деление
+    на ноль. Классическая альтернатива сглаживанию Лапласа (``_psi_laplace``).
+
+    Args:
+        expected: Базовое распределение, словарь bin -> count.
+        actual: Сравниваемое распределение, словарь bin -> count.
+        eps: Нижняя граница доли.
+
+    Returns:
+        Значение PSI.
     """
     bins = sorted(set(expected) | set(actual), key=str)
     expected = np.array([expected.get(k, 0.0) for k in bins], dtype=float)
