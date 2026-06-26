@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Self
 
 import numpy as np
@@ -44,7 +45,7 @@ class NumBinner:
 
         # Пустой вход: один интервал (-inf, inf), точек нет.
         if X.size == 0:
-            self.points_, self.edges_ = (), np.array([-np.inf, np.inf])
+            self.points_, self.edges_ = [], np.array([-np.inf, np.inf])
             return self
 
         vals, counts = np.unique(X, return_counts=True)
@@ -53,28 +54,27 @@ class NumBinner:
         # Низкая кардинальность (уникальных <= n_bins): дискретный режим. Точки — только частые
         # значения (>= min_count); редкие уйдут в other при transform.
         if vals.size <= self.n_bins:
-            self.points_, self.edges_ = tuple(vals[counts >= min_count].tolist()), None
+            self.points_, self.edges_ = vals[counts >= min_count].tolist(), None
             return self
 
-        # Высокая кардинальность: точки — супервстречаемые значения (доля >= point_share).
-        points = ()
+        # Высокая кардинальность: точка — супервстречаемое значение, проходящее ОБА порога:
+        # долю point_share (это спайк) и абсолютный min_count (бин не меньше min_bin).
+        points = []
         if self.point_share and 0.0 < self.point_share <= 1.0:
-            points = tuple(vals[counts / X.size >= self.point_share].tolist())
+            point_floor = max(round(self.point_share * X.size), min_count)
+            points = vals[counts >= point_floor].tolist()
         to_bin = X[~np.isin(X, points)] if points else X
         if to_bin.size == 0:  # все значения — точки, интервалов нет
             self.points_, self.edges_ = points, None
             return self
 
-        # Квантили по остатку: края -> ±inf, редкие интервалы сливаются, точки врезаются в границы.
-        edges = np.unique(np.quantile(to_bin, np.linspace(0.0, 1.0, self.n_bins + 1)))
-        if edges.size < 2:
-            edges = np.array([-np.inf, np.inf])
-        else:
-            edges[0], edges[-1] = -np.inf, np.inf
-            edges = self._merge_rare(to_bin, edges)
-        if points:
-            edges = np.unique(np.concatenate([edges, np.array(points, dtype="float")]))
-        self.points_, self.edges_ = points, edges
+        # Границы: внутренние квантили остатка + точки-разделители, края — ±inf. np.unique
+        # сортирует и убирает совпадения (точку, попавшую ровно на квантиль). Затем редкие
+        # интервалы сливаются ПОСЛЕ врезки точек (точки и ±inf не удаляются), чтобы порог
+        # min_count действовал и на «склоны» у точек, а каждый бин был >= min_bin.
+        quantiles = np.quantile(to_bin, np.linspace(0.0, 1.0, self.n_bins + 1))[1:-1]
+        edges = np.unique(np.concatenate([[-np.inf], quantiles, points, [np.inf]]))
+        self.points_, self.edges_ = points, self._merge_rare(to_bin, edges, min_count, points)
         return self
 
     def transform(self, X) -> pd.Series:
@@ -152,20 +152,47 @@ class NumBinner:
         extra_categories = [extra for extra in (OTHER_BIN, NAN_BIN) if extra in categories_list]
         return X.cat.reorder_categories(sorted_categories + extra_categories, ordered=True)
 
-    def _merge_rare(self, v: np.ndarray, edges: np.ndarray) -> np.ndarray:
-        """Сливает соседние интервалы, пока в каждом < min_bin наблюдений; края ±inf не трогает."""
-        min_count = resolve_min_count(self.min_bin, v.size)
+    @staticmethod
+    def _merge_rare(
+        X: np.ndarray,
+        edges: np.ndarray,
+        min_count: int,
+        protected: Sequence[float] = ()
+    ) -> np.ndarray:
+        """Сливает соседние интервалы, пока в каждом < min_count наблюдений.
+
+        Порог ``min_count`` считается один раз от полной базы (см. fit) и передаётся готовым,
+        чтобы доля min_bin означала долю всей выборки, а не остатка без точек. Защищённые
+        границы — точки и края ±inf — при слиянии не удаляются: тонкий «склон» у точки
+        сливается с внешним соседом, сама точка остаётся отдельным бином.
+
+        Args:
+            X: Непрерывные наблюдения (без точек), по которым считаются размеры интервалов.
+            edges: Границы интервалов, включая ±inf и врезанные точки.
+            min_count: Минимальный размер интервала в наблюдениях.
+            protected: Границы-точки; края ±inf защищаются автоматически.
+
+        Returns:
+            Прореженные границы интервалов.
+        """
         if min_count <= 0:
             return edges
+        keep = set(protected) | {-np.inf, np.inf}
         while edges.size > 2:
-            codes = pd.cut(pd.Series(v), bins=edges, labels=False, include_lowest=True).to_numpy()
-            counts = np.bincount(codes.astype(np.intp), minlength=edges.size - 1)
-            small = np.where(counts < min_count)[0]
-            if small.size == 0:
+            X_binned = pd.cut(pd.Series(X), bins=edges, include_lowest=True)
+            X_counts = X_binned.value_counts(sort=False).to_numpy()
+            for i in map(int, np.where(X_counts < min_count)[0]):
+                # Сливаем интервал, удаляя одну его непрерывную границу: правую, иначе левую.
+                if edges[i + 1] not in keep:
+                    drop = i + 1
+                elif edges[i] not in keep:
+                    drop = i
+                else:
+                    continue  # обе границы защищены (точки/±inf) — интервал не сливаем
+                edges = np.delete(edges, drop)
                 break
-            i = int(small[0])
-            drop = i if i == counts.size - 1 else i + 1  # последний — с левым, иначе с правым
-            edges = np.delete(edges, drop)
+            else:
+                break  # маленьких интервалов, которые можно слить, не осталось
         return edges
 
     def _check_fitted(self) -> None:
