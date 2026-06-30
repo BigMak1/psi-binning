@@ -3,7 +3,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from binning import CatBinner, NumBinner
-from psi import calc_psi_by_period, define_base_data
+from psi import bin_counts, calc_psi_by_period, define_base_data
 
 # Пороги интерпретации PSI.
 PSI_WARN = 0.10
@@ -44,12 +44,13 @@ def _fit_binner(
 def _bin_shares(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
     """Считает доли бинов по периодам (индекс — бин, колонки — период).
 
-    Группировка идёт по самой категориальной Series (через crosstab по кодам): смешанные
-    бины (Interval/число/строка) несравнимы, обычная сортировка по ним падает.
+    Обёртка над ``bin_counts``: счётчики нормируются на сумму столбца (период). Глобально
+    пустые категории (нулевая строка, например ``missing`` без пропусков) отбрасываются, чтобы
+    не плодить лишние нулевые линии на графике.
     """
-    share = pd.crosstab(binned_feature, periods, normalize="columns")
-    order = [b for b in binned_feature.cat.categories if b in share.index]
-    return share.reindex(order)
+    counts = bin_counts(binned_feature, periods)
+    counts = counts[counts.sum(axis=1) > 0]
+    return counts / counts.sum(axis=0)
 
 
 def plot_bin_distribution(
@@ -72,7 +73,7 @@ def plot_bin_distribution(
         psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
         psi_base_mask_col=psi_base_mask_col,
     )
-    share = _bin_shares(binned_feature, pd.Series(df[psi_date_col].to_numpy()))
+    share = _bin_shares(binned_feature, df[psi_date_col])
     periods = list(share.columns)
     fig = go.Figure()
     for b in share.index:
@@ -140,7 +141,7 @@ def plot_feature(
         psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
         psi_base_mask_col=psi_base_mask_col,
     )
-    share = _bin_shares(binned_feature, pd.Series(df[psi_date_col].to_numpy()))
+    share = _bin_shares(binned_feature, df[psi_date_col])
     psi = calc_psi_by_period(df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha)
     psi = psi.reindex(share.columns)  # выровнять по той же оси периодов, что и распределение
     periods = list(share.columns)

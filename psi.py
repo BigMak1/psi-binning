@@ -68,6 +68,30 @@ def calc_psi_by_features(
     return pd.DataFrame(psi_by_feature)
 
 
+def bin_counts(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
+    """Считает число наблюдений в каждом бине по периодам.
+
+    Порядок строк берётся из ``cat.categories``: смешанные бины (Interval/число/строка)
+    несравнимы, обычная сортировка по ним падает. В результат включаются ВСЕ категории, в том
+    числе глобально пустые (например, ``missing`` без пропусков) — с нулями: это держит единый
+    универсум бинов, на котором PSI считается матрицей разом.
+
+    Индексы обоих аргументов сбрасываются, поэтому выравнивание идёт строго по позиции (а не по
+    индексу, как сделал бы ``crosstab`` сам) — функцию можно звать с любыми Series.
+
+    Args:
+        binned_feature: Категориальная Series бинов (результат ``transform``).
+        periods: Series периодов той же длины (выравнивается по позиции).
+
+    Returns:
+        DataFrame счётчиков: индекс — бин (в порядке категорий), колонки — период.
+    """
+    binned_feature = binned_feature.reset_index(drop=True)
+    periods = periods.reset_index(drop=True)
+    counts = pd.crosstab(binned_feature, periods)
+    return counts.reindex(binned_feature.cat.categories, fill_value=0)
+
+
 def calc_psi_by_period(
     df: pd.DataFrame,
     binned_feature: pd.Series,
@@ -77,6 +101,10 @@ def calc_psi_by_period(
     alpha: float = 0.5,
 ) -> pd.Series:
     """Вычисляет PSI каждого периода относительно базового распределения.
+
+    Счётчики бинов по периодам берутся разом матрицей ``bin_counts`` (бин × период), база —
+    общим распределением по ``base_mask``; PSI всех периодов получается одной векторной
+    операцией без цикла по периодам.
 
     Args:
         df: Исходный датафрейм; из него берётся колонка периода.
@@ -89,14 +117,10 @@ def calc_psi_by_period(
     Returns:
         Series со значениями PSI, индексированная и отсортированная по периоду.
     """
-    expected = binned_feature[base_mask].value_counts().to_dict()
-
-    psi = {}
-    for period, period_bins in binned_feature.groupby(df[psi_date_col].to_numpy()):
-        actual = period_bins.value_counts().to_dict()
-        psi[period] = _psi_laplace(expected, actual, alpha)
-
-    return pd.Series(psi, name="psi").sort_index()
+    actual = bin_counts(binned_feature, df[psi_date_col])  # (бин × период), полный универсум бинов
+    expected = binned_feature[base_mask].value_counts().reindex(actual.index, fill_value=0)
+    psi = _psi_laplace(expected.to_numpy(float), actual.to_numpy(float), alpha)
+    return pd.Series(psi, index=actual.columns, name="psi").sort_index()
 
 
 def define_base_data(
@@ -139,47 +163,43 @@ def define_base_data(
     return mask
 
 
-def _psi_laplace(expected: dict, actual: dict, alpha: float = 0.5) -> float:
+def _psi_laplace(expected: np.ndarray, actual: np.ndarray, alpha: float = 0.5) -> np.ndarray:
     """Вычисляет PSI между распределениями бинов со сглаживанием Лапласа.
 
     Доля бина = (count + alpha) / (N + alpha * B). Сглаживание убирает нули и деление на ноль;
-    при больших N влияние alpha ничтожно. alpha = 0.5 соответствует приору Джеффриса.
+    при больших N влияние alpha ничтожно. alpha = 0.5 соответствует приору Джеффриса. Считается
+    векторно по столбцам: ``expected`` — счётчики базы (B,), ``actual`` — счётчики бинов по
+    периодам (B, P); PSI получается для всех периодов сразу.
 
     Args:
-        expected: Базовое распределение, словарь bin -> count.
-        actual: Сравниваемое распределение, словарь bin -> count.
+        expected: Базовые счётчики бинов, форма (B,).
+        actual: Счётчики бинов по периодам, форма (B, P).
         alpha: Параметр сглаживания Лапласа.
 
     Returns:
-        Значение PSI.
+        Значения PSI по периодам, форма (P,).
     """
-    # Ключи-бины разнотипны (Interval / число / строка), поэтому сортируем по строковому виду.
-    bins = sorted(set(expected) | set(actual), key=str)
-    num_bins = len(bins)
-    expected = np.array([expected.get(k, 0.0) for k in bins], dtype=float)
-    actual = np.array([actual.get(k, 0.0) for k in bins], dtype=float)
-    expected = (expected + alpha) / (expected.sum() + alpha * num_bins)
-    actual = (actual + alpha) / (actual.sum() + alpha * num_bins)
-    return float(np.sum((actual - expected) * np.log(actual / expected)))
+    num_bins = expected.shape[0]
+    expected = (expected[:, None] + alpha) / (expected.sum() + alpha * num_bins)
+    actual = (actual + alpha) / (actual.sum(axis=0) + alpha * num_bins)
+    return ((actual - expected) * np.log(actual / expected)).sum(axis=0)
 
 
-def _psi_epsilon(expected: dict, actual: dict, eps: float = 1e-6) -> float:
+def _psi_epsilon(expected: np.ndarray, actual: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """Вычисляет PSI между распределениями бинов с epsilon-клиппингом.
 
     Доли считаются напрямую и поднимаются до ``eps`` (clip), чтобы убрать log(0) и деление
-    на ноль. Классическая альтернатива сглаживанию Лапласа (``_psi_laplace``).
+    на ноль. Классическая альтернатива сглаживанию Лапласа (``_psi_laplace``); те же формы
+    входов/выхода — векторно по столбцам.
 
     Args:
-        expected: Базовое распределение, словарь bin -> count.
-        actual: Сравниваемое распределение, словарь bin -> count.
+        expected: Базовые счётчики бинов, форма (B,).
+        actual: Счётчики бинов по периодам, форма (B, P).
         eps: Нижняя граница доли.
 
     Returns:
-        Значение PSI.
+        Значения PSI по периодам, форма (P,).
     """
-    bins = sorted(set(expected) | set(actual), key=str)
-    expected = np.array([expected.get(k, 0.0) for k in bins], dtype=float)
-    actual = np.array([actual.get(k, 0.0) for k in bins], dtype=float)
-    expected = np.clip(expected / expected.sum(), eps, None)
-    actual = np.clip(actual / actual.sum(), eps, None)
-    return float(np.sum((actual - expected) * np.log(actual / expected)))
+    expected = np.clip(expected[:, None] / expected.sum(), eps, None)
+    actual = np.clip(actual / actual.sum(axis=0), eps, None)
+    return ((actual - expected) * np.log(actual / expected)).sum(axis=0)
