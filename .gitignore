@@ -4,3 +4,8 @@ __pycache__/
 data/
 *.pyc
 .claude/
+
+# артефакты сборки пакета
+build/
+dist/
+*.egg-info/

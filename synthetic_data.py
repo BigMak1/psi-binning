@@ -10,7 +10,13 @@ import pandas as pd
 # 12 календарных месяцев — период наблюдения.
 MONTHS = [dt.date(2024, m, 1) for m in range(1, 13)]
 
-FEATURES_NUMERIC = ["f__income", "f__score", "f__txn_count", "f__rate", "f__num_products"]
+FEATURES_NUMERIC = [
+    "f__income",
+    "f__score",
+    "f__txn_count",
+    "f__rate",
+    "f__num_products",
+]
 FEATURES_CATEGORICAL = ["c__region", "c__channel"]
 FEATURES = FEATURES_NUMERIC + FEATURES_CATEGORICAL
 
@@ -31,9 +37,10 @@ def _dates_in_month(rng: np.random.Generator, month_first: dt.date, n: int) -> l
     return [dt.date(month_first.year, month_first.month, int(d)) for d in days]
 
 
-# Генераторы признаков (t — индекс месяца, 0..11). Каждый признак моделирует свой краевой случай.
+# Генераторы признаков (t — индекс месяца, 0..11). Каждый признак моделирует свой
+# краевой случай.
 def _gen_income(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
-    """Генерирует доход: лог-нормаль с дрейфом медианы (~50k -> ~66k), длинный хвост, ~4% NaN."""
+    """Генерирует доход: лог-нормаль, дрейф медианы (~50k -> ~66k), хвост, ~4% NaN."""
     mu = np.log(50_000) + (np.log(66_000) - np.log(50_000)) * (t / 11)
     x = rng.lognormal(mean=mu, sigma=0.55, size=n)
     x[rng.random(n) < 0.04] = np.nan  # пропуски
@@ -41,15 +48,15 @@ def _gen_income(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
 
 
 def _gen_score(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
-    """Генерирует стабильную величину в [0, 1] без дрейфа — отрицательный контроль (PSI ~ 0)."""
+    """Генерирует стабильную величину [0, 1] без дрейфа — контроль (PSI ~ 0)."""
     return rng.beta(2.5, 2.5, size=n)
 
 
 def _gen_txn_count(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
     """Генерирует счётчик транзакций: спайк нулей (~55%) и пуассоновский хвост."""
-    p_zero = 0.58 - 0.006 * t            # доля нулей слегка падает: 0.58 -> ~0.51
+    p_zero = 0.58 - 0.006 * t  # доля нулей слегка падает: 0.58 -> ~0.51
     out = 1 + rng.poisson(lam=3.0, size=n)  # ненулевой хвост: 1, 2, 3, ...
-    out[rng.random(n) < p_zero] = 0      # спайк нулей
+    out[rng.random(n) < p_zero] = 0  # спайк нулей
     return out.astype(np.int64)
 
 
@@ -61,7 +68,7 @@ def _gen_region(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
 
 
 def _channel_weights(t: int) -> dict:
-    """Возвращает веса каналов месяца ``t``: дрейф mobile/branch, редкий хвост, новая категория."""
+    """Возвращает веса каналов месяца ``t``: дрейф, редкий хвост, новая категория."""
     w = {
         "web": 0.30,
         "mobile": 0.18 + 0.015 * t,  # растёт
@@ -78,7 +85,7 @@ def _channel_weights(t: int) -> dict:
 
 
 def _gen_channel(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
-    """Генерирует канал: высокая кардинальность, редкий хвост и новая категория со временем."""
+    """Генерирует канал: высокая кардинальность, редкий хвост, новая категория."""
     w = _channel_weights(t)
     cats = list(w.keys())
     probs = np.array(list(w.values()), dtype=float)
@@ -87,14 +94,14 @@ def _gen_channel(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
 
 
 def _gen_rate(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
-    """Генерирует ставку: спайк 0.5 в середине распределения (~35%) и непрерывный фон [0, 1]."""
+    """Генерирует ставку: спайк 0.5 в середине (~35%) и непрерывный фон [0, 1]."""
     x = rng.beta(2.5, 2.5, size=n)  # непрерывный фон вокруг 0.5
-    x[rng.random(n) < 0.35] = 0.5   # супервстречаемое значение в середине
+    x[rng.random(n) < 0.35] = 0.5  # супервстречаемое значение в середине
     return x
 
 
 def _gen_num_products(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
-    """Генерирует число продуктов 1..5 (мало уникальных -> дискретный режим) с дрейфом вправо."""
+    """Число продуктов 1..5: мало уникальных (дискретный режим), дрейф вправо."""
     base = np.array([0.40, 0.30, 0.18, 0.08, 0.04])
     shift = 0.012 * t
     p = base + np.array([-shift, -shift / 2, 0.0, shift / 2, shift])
@@ -106,9 +113,9 @@ def _gen_num_products(rng: np.random.Generator, n: int, t: int) -> np.ndarray:
 def generate_sample(n_total: int = 12_000, seed: int = 42) -> pd.DataFrame:
     """Генерирует синтетическую выборку за 12 месяцев.
 
-    Формат повторяет продовый: ``sample_date_orig`` (дата), ``sample_month`` (строка-якорь),
-    числовые ``f__*`` и категориальные ``c__*`` признаки. Каждый признак моделирует свой
-    краевой случай бининга.
+    Формат повторяет продовый: ``sample_date_orig`` (дата), ``sample_month``
+    (строка-якорь), числовые ``f__*`` и категориальные ``c__*`` признаки. Каждый
+    признак моделирует свой краевой случай бининга.
 
     Args:
         n_total: Примерное число строк во всей выборке.
@@ -121,7 +128,7 @@ def generate_sample(n_total: int = 12_000, seed: int = 42) -> pd.DataFrame:
     sizes = _month_sizes(rng, n_total, len(MONTHS))
 
     parts = []
-    for t, (month_first, n) in enumerate(zip(MONTHS, sizes)):
+    for t, (month_first, n) in enumerate(zip(MONTHS, sizes, strict=True)):
         n = int(n)
         if n == 0:
             continue
@@ -157,7 +164,7 @@ def save_sample(df: pd.DataFrame, path: str = "data/sample.parquet") -> None:
 
 
 def load_sample(path: str = "data/sample.parquet") -> pd.DataFrame:
-    """Загружает выборку, приводя форматы (sample_date_orig -> date, sample_month -> str).
+    """Загружает выборку, приводя форматы (date_orig -> date, month -> str).
 
     Args:
         path: Путь к parquet-файлу.

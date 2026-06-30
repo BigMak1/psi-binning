@@ -20,22 +20,25 @@ def calc_psi_by_features(
 ) -> pd.DataFrame:
     """Вычисляет PSI по периодам для набора фичей.
 
-    Для каждой фичи биннер (``CatBinner`` если фича в ``cat_features``, иначе ``NumBinner``)
-    обучается на базе и применяется ко всей выборке, после чего считается PSI каждого периода
-    относительно базы. База выбирается один раз и общая для всех фичей.
+    Для каждой фичи биннер (``CatBinner`` если фича в ``cat_features``, иначе
+    ``NumBinner``) обучается на базе и применяется ко всей выборке, после чего
+    считается PSI каждого периода относительно базы. База выбирается один раз и общая
+    для всех фичей.
 
     Args:
         df: Исходный датафрейм.
         features: Имена фичей для расчёта.
         cat_features: Имена категориальных фичей; ``None`` — все фичи числовые.
-        psi_date_col: Колонка периода; она же задаёт ось окна базы (см. ``define_base_data``).
+        psi_date_col: Колонка периода; она же задаёт ось окна базы
+            (см. ``define_base_data``).
         psi_alpha: Параметр сглаживания Лапласа.
         psi_base_size: Доля строк в базе; ``None`` — вся выборка.
         psi_base_shift_size: Сдвиг окна базы по времени (доля).
         psi_base_mask_col: Имя готовой булевой колонки базы (приоритет над size/shift).
         binner_n_bins: Число квантильных интервалов (для числовых фичей).
         binner_min_frequency: Порог редкого бина (см. ``resolve_min_count``).
-        binner_point_share: Порог доли для выделения точечного бина (для числовых фичей).
+        binner_point_share: Порог доли для выделения точечного бина (для числовых
+            фичей).
 
     Returns:
         DataFrame со значениями PSI: индекс — период, колонки — фичи.
@@ -70,16 +73,20 @@ def calc_psi_by_features(
     return psi_by_features
 
 
-def calc_bin_counts_by_period(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
+def calc_bin_counts_by_period(
+    binned_feature: pd.Series, periods: pd.Series
+) -> pd.DataFrame:
     """Считает число наблюдений в каждом бине по периодам.
 
     Порядок строк берётся из ``cat.categories``: смешанные бины (Interval/число/строка)
-    несравнимы, обычная сортировка по ним падает. В результат включаются ВСЕ категории, в том
-    числе глобально пустые (например, ``missing`` без пропусков) — с нулями: это держит единый
-    универсум бинов, на котором PSI считается матрицей разом.
+    несравнимы, обычная сортировка по ним падает. В результат включаются ВСЕ
+    категории, в том числе глобально пустые (например, ``missing`` без пропусков) —
+    с нулями: это держит единый универсум бинов, на котором PSI считается матрицей
+    разом.
 
-    Индексы обоих аргументов сбрасываются, поэтому выравнивание идёт строго по позиции (а не по
-    индексу, как сделал бы ``crosstab`` сам) — функцию можно звать с любыми Series.
+    Индексы обоих аргументов сбрасываются, поэтому выравнивание идёт строго по позиции
+    (а не по индексу, как сделал бы ``crosstab`` сам) — функцию можно звать с любыми
+    Series.
 
     Args:
         binned_feature: Категориальная Series бинов (результат ``transform``).
@@ -105,8 +112,8 @@ def calc_psi_by_period(
     """Вычисляет PSI каждого периода относительно базового распределения.
 
     Счётчики бинов по периодам берутся разом матрицей ``calc_bin_counts_by_period``
-    (бин × период), база — общим распределением по ``base_mask``; PSI всех периодов получается
-    одной векторной операцией без цикла по периодам.
+    (бин × период), база — общим распределением по ``base_mask``; PSI всех периодов
+    получается одной векторной операцией без цикла по периодам.
 
     Args:
         df: Исходный датафрейм; из него берётся колонка периода.
@@ -120,7 +127,9 @@ def calc_psi_by_period(
         Series со значениями PSI, индексированная и отсортированная по периоду.
     """
     actual = calc_bin_counts_by_period(binned_feature, df[psi_date_col])  # бин × период
-    expected = binned_feature[base_mask].value_counts().reindex(actual.index, fill_value=0)
+    expected = (
+        binned_feature[base_mask].value_counts().reindex(actual.index, fill_value=0)
+    )
     psi = _psi_laplace(expected.to_numpy(float), actual.to_numpy(float), alpha)
     return pd.Series(psi, index=actual.columns, name="psi").sort_index()
 
@@ -141,7 +150,8 @@ def define_base_data(
         base_size: Доля строк в базе; ``None`` — вся выборка.
         shift_size: Сдвиг окна базы по времени (доля): окно строк [shift, shift + base];
             позволяет пропустить проблемные ранние периоды.
-        mask_col: Имя готовой булевой колонки базы (приоритет над остальными параметрами).
+        mask_col: Имя готовой булевой колонки базы (приоритет над остальными
+            параметрами).
 
     Returns:
         Булева маска строк базы той же длины, что и ``df``.
@@ -149,7 +159,7 @@ def define_base_data(
     Examples:
         define_base_data(df)                                 -> вся выборка
         define_base_data(df, base_size=0.2)                  -> первые 20% по дате
-        define_base_data(df, base_size=0.2, shift_size=0.2)  -> вторые 20% (с 20% по 40%)
+        define_base_data(df, base_size=0.2, shift_size=0.2)  -> вторые 20% (20–40%)
         define_base_data(df, mask_col="is_base")             -> готовая разметка
     """
     n = len(df)
@@ -165,13 +175,16 @@ def define_base_data(
     return mask
 
 
-def _psi_laplace(expected: np.ndarray, actual: np.ndarray, alpha: float = 0.5) -> np.ndarray:
+def _psi_laplace(
+    expected: np.ndarray, actual: np.ndarray, alpha: float = 0.5
+) -> np.ndarray:
     """Вычисляет PSI между распределениями бинов со сглаживанием Лапласа.
 
-    Доля бина = (count + alpha) / (N + alpha * B). Сглаживание убирает нули и деление на ноль;
-    при больших N влияние alpha ничтожно. alpha = 0.5 соответствует приору Джеффриса. Считается
-    векторно по столбцам: ``expected`` — счётчики базы (B,), ``actual`` — счётчики бинов по
-    периодам (B, P); PSI получается для всех периодов сразу.
+    Доля бина = (count + alpha) / (N + alpha * B). Сглаживание убирает нули и деление на
+    ноль; при больших N влияние alpha ничтожно. alpha = 0.5 соответствует приору
+    Джеффриса. Считается векторно по столбцам: ``expected`` — счётчики базы (B,),
+    ``actual`` — счётчики бинов по периодам (B, P); PSI получается для всех периодов
+    сразу.
 
     Args:
         expected: Базовые счётчики бинов, форма (B,).
@@ -187,12 +200,14 @@ def _psi_laplace(expected: np.ndarray, actual: np.ndarray, alpha: float = 0.5) -
     return ((actual - expected) * np.log(actual / expected)).sum(axis=0)
 
 
-def _psi_epsilon(expected: np.ndarray, actual: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+def _psi_epsilon(
+    expected: np.ndarray, actual: np.ndarray, eps: float = 1e-6
+) -> np.ndarray:
     """Вычисляет PSI между распределениями бинов с epsilon-клиппингом.
 
-    Доли считаются напрямую и поднимаются до ``eps`` (clip), чтобы убрать log(0) и деление
-    на ноль. Классическая альтернатива сглаживанию Лапласа (``_psi_laplace``); те же формы
-    входов/выхода — векторно по столбцам.
+    Доли считаются напрямую и поднимаются до ``eps`` (clip), чтобы убрать log(0) и
+    деление на ноль. Классическая альтернатива сглаживанию Лапласа (``_psi_laplace``);
+    те же формы входов/выхода — векторно по столбцам.
 
     Args:
         expected: Базовые счётчики бинов, форма (B,).

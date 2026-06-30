@@ -9,7 +9,8 @@ class CatBinner:
     """Разбивает категориальную фичу на бины.
 
     Учит частые категории на переданных данных (база/train): каждая получает свой бин.
-    При transform редкие и новые категории уходят в ``OTHER_BIN``, пропуски — в ``NAN_BIN``.
+    При transform редкие и новые категории уходят в ``OTHER_BIN``, пропуски —
+    в ``NAN_BIN``.
     Класс не знает про PSI и пригоден, например, для WoE.
     """
 
@@ -17,7 +18,7 @@ class CatBinner:
         self.min_frequency = min_frequency
 
     def fit(self, X) -> Self:
-        """Учит частые категории points_ (>= min_frequency наблюдений, по убыванию частоты).
+        """Учит частые категории points_ (>= min_frequency, по убыванию частоты).
 
         Args:
             X: Категориальная фича (база/train).
@@ -28,7 +29,9 @@ class CatBinner:
         X = as_1d(X).astype("object").dropna()
         counts = X.value_counts()
         min_count = resolve_min_count(self.min_frequency, len(X))
-        self.points_ = [category for category, count in counts.items() if count >= min_count]
+        self.points_ = [
+            category for category, count in counts.items() if count >= min_count
+        ]
         return self
 
     def transform(self, X) -> pd.Series:
@@ -40,16 +43,21 @@ class CatBinner:
             X: Фича для разметки.
 
         Returns:
-            Упорядоченная категориальная Series (частые категории по частоте, затем other, missing).
+            Упорядоченная категориальная Series (частые категории по частоте, затем
+            other, missing).
         """
         self._check_fitted()
         X = as_1d(X).reset_index(drop=True).astype("object")
 
-        out = X.where(X.isin(set(self.points_)), OTHER_BIN)  # редкие и новые значения -> other
-        out[X.isna()] = NAN_BIN                              # пропуски -> missing
+        out = X.where(
+            X.isin(set(self.points_)), OTHER_BIN
+        )  # редкие и новые значения -> other
+        out[X.isna()] = NAN_BIN  # пропуски -> missing
 
         out = pd.Series(
-            pd.Categorical(out, categories=[*self.points_, OTHER_BIN, NAN_BIN], ordered=True)
+            pd.Categorical(
+                out, categories=[*self.points_, OTHER_BIN, NAN_BIN], ordered=True
+            )
         )
         self.bins_ = out.cat.categories
         return out

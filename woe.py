@@ -11,7 +11,8 @@ def calc_woe_laplace(
 ) -> np.ndarray:
     """Вычисляет WoE бинов со сглаживанием Лапласа.
 
-    WoE бина = ln(доля_позитивов / доля_негативов), где доля = (events + alpha) / total_events.
+    WoE бина = ln(доля_позитивов / доля_негативов),
+    где доля = (events + alpha) / total_events.
     Добавление alpha к счётчикам (по умолчанию 0.5 — приор Джеффриса, как в PSI) убирает
     log(0)/деление на ноль в пустых бинах; alpha=0 — «сырая» формула (может дать ±inf).
     Положительный WoE — доля позитивов выше доли негативов, отрицательный — наоборот.
@@ -27,8 +28,12 @@ def calc_woe_laplace(
     Returns:
         WoE по бинам (той же формы, что входные счётчики).
     """
-    positive_rate = (np.asarray(positive_events, dtype=float) + alpha) / total_positive_events
-    negative_rate = (np.asarray(negative_events, dtype=float) + alpha) / total_negative_events
+    positive_rate = (
+        np.asarray(positive_events, dtype=float) + alpha
+    ) / total_positive_events
+    negative_rate = (
+        np.asarray(negative_events, dtype=float) + alpha
+    ) / total_negative_events
     return np.log(positive_rate / negative_rate)
 
 
@@ -42,9 +47,10 @@ def calc_woe_epsilon(
 ) -> np.ndarray:
     """Вычисляет WoE бинов с epsilon-клиппингом.
 
-    WoE бина = ln(доля_позитивов / доля_негативов), где доля = events / total_events, поднятая
-    до eps (clip), чтобы убрать log(0)/деление на ноль. Классическая альтернатива сглаживанию
-    Лапласа (``calc_woe_laplace``): пустой бин даёт не ±inf, а ограниченный крайний WoE ~ln(eps).
+    WoE бина = ln(доля_позитивов / доля_негативов), где доля = events / total_events,
+    поднятая до eps (clip), чтобы убрать log(0)/деление на ноль. Классическая
+    альтернатива сглаживанию Лапласа (``calc_woe_laplace``): пустой бин даёт не ±inf,
+    а ограниченный крайний WoE ~ln(eps).
     Положительный WoE — доля позитивов выше доли негативов, отрицательный — наоборот.
     Принимает скаляры или массивы (по элементу на бин).
 

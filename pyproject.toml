@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "psi-binning-sandbox"
-version = "0.1.0"
+dynamic = ["version"]  # версия берётся из git-тега (setuptools-scm)
 description = "Песочница для бининга фичей (PSI / WoE) и мониторинга стабильности"
 requires-python = ">=3.14"
 dependencies = [
@@ -13,19 +17,33 @@ dependencies = [
     "nbformat>=5.10",
 ]
 
-[tool.uv]
-package = false
+[tool.setuptools]
+py-modules = ["psi", "psi_plots", "woe"]  # библиотечные модули верхнего уровня
+packages = ["binning"]                    # пакет биннеров
+# synthetic_data / build_*.py — dev-инструменты, в дистрибутив не входят
+
+[tool.setuptools_scm]
+# версия выводится из git-тегов вида vX.Y.Z; без тега — dev-версия
 
 [tool.ruff]
-line-length = 100
+line-length = 88
+target-version = "py314"
 extend-exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "D"]
-ignore = ["D100", "D104", "D105", "D107", "D417"]
+select = ["E", "F", "W", "I", "D", "UP", "B", "SIM", "C4", "Q", "RUF"]
+ignore = [
+    "D100", "D104", "D105", "D107", "D417",
+    "RUF001", "RUF002", "RUF003",  # омоглифы кириллицы (с/а/е/о…) — русский текст это норма
+    "SIM300",  # «X == point»: ruff принимает sklearn-конвенцию X (заглавная) за константу
+    "Q003",    # конфликтует с политикой двойных кавычек (предлагает одинарные ради экранирования)
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+
 [tool.ruff.lint.per-file-ignores]
-"build_notebook.py" = ["E501"]  # длинные markdown-строки ячеек ноутбука
+"build_*.py" = ["E501"]  # длинные markdown-строки ячеек ноутбуков

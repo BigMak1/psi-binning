@@ -5,8 +5,9 @@ import pandas as pd
 NAN_BIN = "missing"
 OTHER_BIN = "other"
 
-# Авто-порог min_frequency: clip(AUTO_MIN_FRACTION * n, AUTO_MIN_FLOOR, AUTO_MIN_CEIL). Считается от
-# размера reference: на малых выборках мягкий, на больших не отбрасывает надёжные группы.
+# Авто-порог min_frequency: clip(AUTO_MIN_FRACTION * n, AUTO_MIN_FLOOR, AUTO_MIN_CEIL).
+# Считается от размера reference: на малых выборках мягкий, на больших не отбрасывает
+# надёжные группы.
 AUTO_MIN_FRACTION = 0.01
 AUTO_MIN_FLOOR = 20
 AUTO_MIN_CEIL = 1000
@@ -42,7 +43,8 @@ def resolve_min_count(min_frequency: int | float | str | None, n: int) -> int:
     """Преобразует параметр min_frequency в абсолютный порог наблюдений на бин.
 
     Args:
-        min_frequency: Правило порога: ``"auto"`` — clip(AUTO_MIN_FRACTION * n, пол, потолок);
+        min_frequency: Правило порога: ``"auto"`` —
+            clip(AUTO_MIN_FRACTION * n, пол, потолок);
             целое >= 1 — абсолютное значение; float из (0, 1) — доля от ``n``;
             ``None`` или 0 — порог отключён.
         n: Размер выборки, от которого считается порог.
@@ -57,8 +59,10 @@ def resolve_min_count(min_frequency: int | float | str | None, n: int) -> int:
         return 0
     if isinstance(min_frequency, str):
         if min_frequency == "auto":
-            return int(np.clip(round(AUTO_MIN_FRACTION * n), AUTO_MIN_FLOOR, AUTO_MIN_CEIL))
+            return int(
+                np.clip(round(AUTO_MIN_FRACTION * n), AUTO_MIN_FLOOR, AUTO_MIN_CEIL)
+            )
         raise ValueError(f"неизвестное min_frequency: {min_frequency!r}")
     if isinstance(min_frequency, float) and 0.0 < min_frequency < 1.0:
-        return int(round(min_frequency * n))
+        return round(min_frequency * n)
     return int(min_frequency)
