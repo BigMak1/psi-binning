@@ -15,7 +15,7 @@ def calc_psi_by_features(
     psi_base_shift_size: float = 0.0,
     psi_base_mask_col: str | None = None,
     binner_n_bins: int = 10,
-    binner_min_bin: int | float | str | None = "auto",
+    binner_min_frequency: int | float | str | None = "auto",
     binner_point_share: float = 0.10,
 ) -> pd.DataFrame:
     """Вычисляет PSI по периодам для набора фичей.
@@ -34,7 +34,7 @@ def calc_psi_by_features(
         psi_base_shift_size: Сдвиг окна базы по времени (доля).
         psi_base_mask_col: Имя готовой булевой колонки базы (приоритет над size/shift).
         binner_n_bins: Число квантильных интервалов (для числовых фичей).
-        binner_min_bin: Порог редкого бина (см. ``resolve_min_count``).
+        binner_min_frequency: Порог редкого бина (см. ``resolve_min_count``).
         binner_point_share: Порог доли для выделения точечного бина (для числовых фичей).
 
     Returns:
@@ -49,26 +49,28 @@ def calc_psi_by_features(
     )
     cat_features = set(cat_features or [])  # пусто -> все фичи числовые
 
-    psi_by_feature = {}
+    psi_by_features = {}
     for feature in features:
         if feature in cat_features:
-            binner = CatBinner(min_bin=binner_min_bin)
+            binner = CatBinner(min_frequency=binner_min_frequency)
         else:
             binner = NumBinner(
                 n_bins=binner_n_bins,
-                min_bin=binner_min_bin,
+                min_frequency=binner_min_frequency,
                 point_share=binner_point_share,
             )
         binner.fit(df.loc[base_mask, feature])  # учим границы только на базе
         binned_feature = binner.transform(df[feature])  # применяем ко всей выборке
-        psi_by_feature[feature] = calc_psi_by_period(
+        psi_by_features[feature] = calc_psi_by_period(
             df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha
         )
+    psi_by_features = pd.DataFrame(psi_by_features).reset_index(names=[psi_date_col])
+    base_dates = df.loc[base_mask, psi_date_col].unique()
+    psi_by_features["is_psi_base"] = psi_by_features[psi_date_col].isin(base_dates)
+    return psi_by_features
 
-    return pd.DataFrame(psi_by_feature)
 
-
-def bin_counts(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
+def calc_bin_counts_by_period(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
     """Считает число наблюдений в каждом бине по периодам.
 
     Порядок строк берётся из ``cat.categories``: смешанные бины (Interval/число/строка)
@@ -102,9 +104,9 @@ def calc_psi_by_period(
 ) -> pd.Series:
     """Вычисляет PSI каждого периода относительно базового распределения.
 
-    Счётчики бинов по периодам берутся разом матрицей ``bin_counts`` (бин × период), база —
-    общим распределением по ``base_mask``; PSI всех периодов получается одной векторной
-    операцией без цикла по периодам.
+    Счётчики бинов по периодам берутся разом матрицей ``calc_bin_counts_by_period``
+    (бин × период), база — общим распределением по ``base_mask``; PSI всех периодов получается
+    одной векторной операцией без цикла по периодам.
 
     Args:
         df: Исходный датафрейм; из него берётся колонка периода.
@@ -117,7 +119,7 @@ def calc_psi_by_period(
     Returns:
         Series со значениями PSI, индексированная и отсортированная по периоду.
     """
-    actual = bin_counts(binned_feature, df[psi_date_col])  # (бин × период), полный универсум бинов
+    actual = calc_bin_counts_by_period(binned_feature, df[psi_date_col])  # бин × период
     expected = binned_feature[base_mask].value_counts().reindex(actual.index, fill_value=0)
     psi = _psi_laplace(expected.to_numpy(float), actual.to_numpy(float), alpha)
     return pd.Series(psi, index=actual.columns, name="psi").sort_index()
@@ -156,8 +158,8 @@ def define_base_data(
     if base_size is None:
         return np.ones(n, dtype=bool)
     order = np.argsort(df[date_col].to_numpy(), kind="stable")
-    lo = min(int(round(shift_size * n)), n)
-    hi = min(lo + int(round(base_size * n)), n)
+    lo = min(int(shift_size * n), n)
+    hi = min(lo + int(base_size * n), n)
     mask = np.zeros(n, dtype=bool)
     mask[order[lo:hi]] = True
     return mask

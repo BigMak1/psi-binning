@@ -13,11 +13,11 @@ class CatBinner:
     Класс не знает про PSI и пригоден, например, для WoE.
     """
 
-    def __init__(self, *, min_bin: int | float | str | None = "auto"):
-        self.min_bin = min_bin
+    def __init__(self, *, min_frequency: int | float | str | None = "auto"):
+        self.min_frequency = min_frequency
 
     def fit(self, X) -> Self:
-        """Учит частые категории points_ (>= min_bin наблюдений, по убыванию частоты).
+        """Учит частые категории points_ (>= min_frequency наблюдений, по убыванию частоты).
 
         Args:
             X: Категориальная фича (база/train).
@@ -27,7 +27,7 @@ class CatBinner:
         """
         X = as_1d(X).astype("object").dropna()
         counts = X.value_counts()
-        min_count = resolve_min_count(self.min_bin, len(X))
+        min_count = resolve_min_count(self.min_frequency, len(X))
         self.points_ = [category for category, count in counts.items() if count >= min_count]
         return self
 

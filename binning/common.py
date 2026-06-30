@@ -5,7 +5,7 @@ import pandas as pd
 NAN_BIN = "missing"
 OTHER_BIN = "other"
 
-# Авто-порог min_bin: clip(AUTO_MIN_FRACTION * n, AUTO_MIN_FLOOR, AUTO_MIN_CEIL). Считается от
+# Авто-порог min_frequency: clip(AUTO_MIN_FRACTION * n, AUTO_MIN_FLOOR, AUTO_MIN_CEIL). Считается от
 # размера reference: на малых выборках мягкий, на больших не отбрасывает надёжные группы.
 AUTO_MIN_FRACTION = 0.01
 AUTO_MIN_FLOOR = 20
@@ -38,11 +38,11 @@ def as_1d(X) -> pd.Series:
     return pd.Series(arr)
 
 
-def resolve_min_count(min_bin: int | float | str | None, n: int) -> int:
-    """Преобразует параметр min_bin в абсолютный порог наблюдений на бин.
+def resolve_min_count(min_frequency: int | float | str | None, n: int) -> int:
+    """Преобразует параметр min_frequency в абсолютный порог наблюдений на бин.
 
     Args:
-        min_bin: Правило порога: ``"auto"`` — clip(AUTO_MIN_FRACTION * n, пол, потолок);
+        min_frequency: Правило порога: ``"auto"`` — clip(AUTO_MIN_FRACTION * n, пол, потолок);
             целое >= 1 — абсолютное значение; float из (0, 1) — доля от ``n``;
             ``None`` или 0 — порог отключён.
         n: Размер выборки, от которого считается порог.
@@ -51,14 +51,14 @@ def resolve_min_count(min_bin: int | float | str | None, n: int) -> int:
         Абсолютный порог наблюдений на бин.
 
     Raises:
-        ValueError: Если ``min_bin`` задан неизвестной строкой.
+        ValueError: Если ``min_frequency`` задан неизвестной строкой.
     """
-    if not min_bin:
+    if not min_frequency:
         return 0
-    if isinstance(min_bin, str):
-        if min_bin == "auto":
+    if isinstance(min_frequency, str):
+        if min_frequency == "auto":
             return int(np.clip(round(AUTO_MIN_FRACTION * n), AUTO_MIN_FLOOR, AUTO_MIN_CEIL))
-        raise ValueError(f"неизвестное min_bin: {min_bin!r}")
-    if isinstance(min_bin, float) and 0.0 < min_bin < 1.0:
-        return int(round(min_bin * n))
-    return int(min_bin)
+        raise ValueError(f"неизвестное min_frequency: {min_frequency!r}")
+    if isinstance(min_frequency, float) and 0.0 < min_frequency < 1.0:
+        return int(round(min_frequency * n))
+    return int(min_frequency)

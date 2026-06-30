@@ -13,7 +13,7 @@ class NumBinner:
     Учит границы на переданных данных (база/train). Возможны два режима:
 
     - мало уникальных значений (<= n_bins) — дискретный режим: каждое частое значение
-      получает свой бин, редкие (< min_bin наблюдений) уходят в other;
+      получает свой бин, редкие (< min_frequency наблюдений) уходят в other;
     - иначе — точками выделяются супервстречаемые значения (доля >= point_share), остальное
       бьётся на квантили; точки врезаются в границы, чтобы интервал их не накрывал.
 
@@ -25,11 +25,11 @@ class NumBinner:
             self,
             *,
             n_bins: int = 10,
-            min_bin: int | float | str | None = "auto",
+            min_frequency: int | float | str | None = "auto",
             point_share: float = 0.10
         ):
         self.n_bins = n_bins
-        self.min_bin = min_bin
+        self.min_frequency = min_frequency
         self.point_share = point_share
 
     def fit(self, X) -> Self:
@@ -49,7 +49,7 @@ class NumBinner:
             return self
 
         vals, counts = np.unique(X, return_counts=True)
-        min_count = resolve_min_count(self.min_bin, X.size)
+        min_count = resolve_min_count(self.min_frequency, X.size)
 
         # Низкая кардинальность (уникальных <= n_bins): дискретный режим. Точки — только частые
         # значения (>= min_count); редкие уйдут в other при transform.
@@ -58,7 +58,7 @@ class NumBinner:
             return self
 
         # Высокая кардинальность: точка — супервстречаемое значение, проходящее ОБА порога:
-        # долю point_share (это спайк) и абсолютный min_count (бин не меньше min_bin).
+        # долю point_share (это спайк) и абсолютный min_count (бин не меньше min_frequency).
         points = []
         if self.point_share and 0.0 < self.point_share <= 1.0:
             point_floor = max(round(self.point_share * X.size), min_count)
@@ -71,7 +71,7 @@ class NumBinner:
         # Границы: внутренние квантили остатка + точки-разделители, края — ±inf. np.unique
         # сортирует и убирает совпадения (точку, попавшую ровно на квантиль). Затем редкие
         # интервалы сливаются ПОСЛЕ врезки точек (точки и ±inf не удаляются), чтобы порог
-        # min_count действовал и на «склоны» у точек, а каждый бин был >= min_bin.
+        # min_count действовал и на «склоны» у точек, а каждый бин был >= min_frequency.
         quantiles = np.quantile(to_bin, np.linspace(0.0, 1.0, self.n_bins + 1))[1:-1]
         edges = np.unique(np.concatenate([[-np.inf], quantiles, points, [np.inf]]))
         self.points_, self.edges_ = points, self._merge_rare(to_bin, edges, min_count, points)
@@ -162,7 +162,7 @@ class NumBinner:
         """Сливает соседние интервалы, пока в каждом < min_count наблюдений.
 
         Порог ``min_count`` считается один раз от полной базы (см. fit) и передаётся готовым,
-        чтобы доля min_bin означала долю всей выборки, а не остатка без точек. Защищённые
+        чтобы доля min_frequency означала долю всей выборки, а не остатка без точек. Защищённые
         границы — точки и края ±inf — при слиянии не удаляются: тонкий «склон» у точки
         сливается с внешним соседом, сама точка остаётся отдельным бином.
 

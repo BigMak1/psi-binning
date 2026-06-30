@@ -1,13 +1,19 @@
+from collections.abc import Sequence
+
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from binning import CatBinner, NumBinner
-from psi import bin_counts, calc_psi_by_period, define_base_data
+from psi import calc_bin_counts_by_period, calc_psi_by_period, define_base_data
 
-# Пороги интерпретации PSI.
+# Пороги интерпретации PSI и их оформление на графике (y, подпись, цвет, штрих).
 PSI_WARN = 0.10
 PSI_ALERT = 0.25
+PSI_THRESHOLDS = (
+    (PSI_WARN, "0.10 warn", "orange", "dot"),
+    (PSI_ALERT, "0.25 alert", "red", "dash"),
+)
 
 
 def _base_caption(
@@ -24,7 +30,7 @@ def _base_caption(
 
 def _fit_binner(
     df, feature, *, is_category,
-    binner_n_bins, binner_min_bin, binner_point_share,
+    binner_n_bins, binner_min_frequency, binner_point_share,
     psi_date_col, psi_base_size, psi_base_shift_size, psi_base_mask_col,
 ):
     """Выбирает базу, обучает биннер на ней и применяет ко всей выборке.
@@ -34,28 +40,77 @@ def _fit_binner(
     """
     base_mask = define_base_data(df, date_col=psi_date_col, base_size=psi_base_size,
                                  shift_size=psi_base_shift_size, mask_col=psi_base_mask_col)
-    binner = (CatBinner(min_bin=binner_min_bin) if is_category
-              else NumBinner(n_bins=binner_n_bins, min_bin=binner_min_bin,
+    binner = (CatBinner(min_frequency=binner_min_frequency) if is_category
+              else NumBinner(n_bins=binner_n_bins, min_frequency=binner_min_frequency,
                              point_share=binner_point_share))
     binner.fit(df.loc[base_mask, feature])
     return binner.transform(df[feature]), base_mask
 
 
-def _bin_shares(binned_feature: pd.Series, periods: pd.Series) -> pd.DataFrame:
-    """Считает доли бинов по периодам (индекс — бин, колонки — период).
+def _add_period_lines(
+    fig: go.Figure, table: pd.DataFrame | pd.Series, *,
+    normalize: bool = False, color: str | None = None, row=None, col=None,
+) -> None:
+    """Добавляет в ``fig`` по линии (lines+markers) на каждый ряд таблицы.
 
-    Обёртка над ``bin_counts``: счётчики нормируются на сумму столбца (период). Глобально
-    пустые категории (нулевая строка, например ``missing`` без пропусков) отбрасываются, чтобы
-    не плодить лишние нулевые линии на графике.
+    ``Series`` трактуется как одна линия; ``DataFrame`` — строки = линии, колонки = периоды
+    (ось X). ``normalize`` нормирует столбцы в доли; полностью нулевые/пустые ряды не рисуются
+    (чтобы не плодить линии-нули, например ``missing`` без пропусков).
     """
-    counts = bin_counts(binned_feature, periods)
-    counts = counts[counts.sum(axis=1) > 0]
-    return counts / counts.sum(axis=0)
+    if isinstance(table, pd.Series):
+        table = table.to_frame().T
+    table = table.loc[(table.fillna(0) != 0).any(axis=1)]
+    if normalize:
+        table = table / table.sum(axis=0)
+    periods = list(table.columns)
+    line = dict(color=color) if color else None
+    for name in table.index:
+        fig.add_scatter(x=periods, y=table.loc[name].to_numpy(), mode="lines+markers",
+                        name=str(name), line=line, row=row, col=col)
+
+
+def _add_thresholds(
+    fig: go.Figure, thresholds: Sequence[tuple], *, annotate: bool = True, row=None, col=None,
+) -> None:
+    """Рисует горизонтальные линии-пороги (y, подпись, цвет, тип штриха)."""
+    for y, label, color, dash in thresholds:
+        ann = dict(annotation_text=label, annotation_position="top left") if annotate else {}
+        fig.add_hline(y=y, line_dash=dash, line_color=color, row=row, col=col, **ann)
+
+
+def draw_lines_by_period(
+    table: pd.DataFrame | pd.Series, *,
+    normalize: bool = False, thresholds: Sequence[tuple] = (), color: str | None = None,
+    title: str = "", xaxis_title: str = "Период", yaxis_title: str = "",
+    legend_title: str = "", hovermode: str = "x unified", height: int | None = None,
+) -> go.Figure:
+    """Рисует линии по периодам — по линии на каждый ряд таблицы.
+
+    Универсальный примитив: ``DataFrame`` (строки = бины/ряды, колонки = периоды) даёт линию на
+    строку, ``Series`` (индекс = периоды) — одну линию (например, PSI). Бины и PSI рисуются одним
+    и тем же кодом; различие — только в данных и оформлении.
+
+    Args:
+        table: Таблица бин × период (или Series ряда по периодам).
+        normalize: Нормировать столбцы в доли (счётчики -> доли периода).
+        thresholds: Пороги-hline: кортежи (y, подпись, цвет, штрих).
+        color: Единый цвет линий (для одиночного ряда вроде PSI); ``None`` — палитра по умолчанию.
+        title: Заголовок; xaxis_title/yaxis_title/legend_title/hovermode/height — оформление.
+
+    Returns:
+        Figure plotly с линиями по периодам.
+    """
+    fig = go.Figure()
+    _add_period_lines(fig, table, normalize=normalize, color=color)
+    _add_thresholds(fig, thresholds)
+    fig.update_layout(title=title, xaxis_title=xaxis_title, yaxis_title=yaxis_title,
+                      legend_title=legend_title, hovermode=hovermode, height=height)
+    return fig
 
 
 def plot_bin_distribution(
     df, feature, *, is_category=False,
-    binner_n_bins=10, binner_min_bin="auto", binner_point_share=0.10,
+    binner_n_bins=10, binner_min_frequency="auto", binner_point_share=0.10,
     psi_date_col="sample_month", psi_base_size=None,
     psi_base_shift_size=0.0, psi_base_mask_col=None,
 ) -> go.Figure:
@@ -68,26 +123,21 @@ def plot_bin_distribution(
     """
     binned_feature, _ = _fit_binner(
         df, feature, is_category=is_category,
-        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin,
+        binner_n_bins=binner_n_bins, binner_min_frequency=binner_min_frequency,
         binner_point_share=binner_point_share, psi_date_col=psi_date_col,
         psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
         psi_base_mask_col=psi_base_mask_col,
     )
-    share = _bin_shares(binned_feature, df[psi_date_col])
-    periods = list(share.columns)
-    fig = go.Figure()
-    for b in share.index:
-        fig.add_scatter(x=periods, y=share.loc[b].to_numpy(), mode="lines+markers", name=str(b))
-    fig.update_layout(
-        title=f"Распределение бинов — {feature}",
-        xaxis_title="Период", yaxis_title="Доля", legend_title="Бин", hovermode="x unified",
+    counts = calc_bin_counts_by_period(binned_feature, df[psi_date_col])
+    return draw_lines_by_period(
+        counts, normalize=True, title=f"Распределение бинов — {feature}",
+        yaxis_title="Доля", legend_title="Бин",
     )
-    return fig
 
 
 def plot_psi(
     df, feature, *, is_category=False,
-    binner_n_bins=10, binner_min_bin="auto", binner_point_share=0.10,
+    binner_n_bins=10, binner_min_frequency="auto", binner_point_share=0.10,
     psi_date_col="sample_month", psi_base_size=None,
     psi_base_shift_size=0.0, psi_base_mask_col=None,
     psi_alpha=0.5,
@@ -101,28 +151,22 @@ def plot_psi(
     """
     binned_feature, base_mask = _fit_binner(
         df, feature, is_category=is_category,
-        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin,
+        binner_n_bins=binner_n_bins, binner_min_frequency=binner_min_frequency,
         binner_point_share=binner_point_share, psi_date_col=psi_date_col,
         psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
         psi_base_mask_col=psi_base_mask_col,
     )
     psi = calc_psi_by_period(df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha)
-    fig = go.Figure()
-    fig.add_scatter(x=list(psi.index), y=psi.to_numpy(),
-                    mode="lines+markers", name="PSI", line=dict(color="#1f2937"))
-    fig.add_hline(y=PSI_WARN, line_dash="dot", line_color="orange",
-                  annotation_text="0.10 warn", annotation_position="top left")
-    fig.add_hline(y=PSI_ALERT, line_dash="dash", line_color="red",
-                  annotation_text="0.25 alert", annotation_position="top left")
     cap = _base_caption(psi_base_size, psi_base_shift_size, psi_base_mask_col)
-    fig.update_layout(title=f"PSI по периодам — {feature} ({cap})",
-                      xaxis_title="Период", yaxis_title="PSI")
-    return fig
+    return draw_lines_by_period(
+        psi.rename("PSI"), thresholds=PSI_THRESHOLDS, color="#1f2937",
+        title=f"PSI по периодам — {feature} ({cap})", yaxis_title="PSI",
+    )
 
 
 def plot_feature(
     df, feature, *, is_category=False,
-    binner_n_bins=10, binner_min_bin="auto", binner_point_share=0.10,
+    binner_n_bins=10, binner_min_frequency="auto", binner_point_share=0.10,
     psi_date_col="sample_month", psi_base_size=None,
     psi_base_shift_size=0.0, psi_base_mask_col=None,
     psi_alpha=0.5, height=640,
@@ -136,28 +180,22 @@ def plot_feature(
     """
     binned_feature, base_mask = _fit_binner(
         df, feature, is_category=is_category,
-        binner_n_bins=binner_n_bins, binner_min_bin=binner_min_bin,
+        binner_n_bins=binner_n_bins, binner_min_frequency=binner_min_frequency,
         binner_point_share=binner_point_share, psi_date_col=psi_date_col,
         psi_base_size=psi_base_size, psi_base_shift_size=psi_base_shift_size,
         psi_base_mask_col=psi_base_mask_col,
     )
-    share = _bin_shares(binned_feature, df[psi_date_col])
+    counts = calc_bin_counts_by_period(binned_feature, df[psi_date_col])
     psi = calc_psi_by_period(df, binned_feature, psi_date_col, base_mask, alpha=psi_alpha)
-    psi = psi.reindex(share.columns)  # выровнять по той же оси периодов, что и распределение
-    periods = list(share.columns)
     cap = _base_caption(psi_base_size, psi_base_shift_size, psi_base_mask_col)
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, row_heights=[0.62, 0.38], vertical_spacing=0.09,
         subplot_titles=(f"Доли бинов — {feature}", f"PSI ({cap})"),
     )
-    for b in share.index:
-        fig.add_scatter(x=periods, y=share.loc[b].to_numpy(), mode="lines+markers",
-                        name=str(b), row=1, col=1)
-    fig.add_scatter(x=periods, y=psi.to_numpy(), mode="lines+markers",
-                    name="PSI", line=dict(color="#1f2937"), row=2, col=1)
-    fig.add_hline(y=PSI_WARN, line_dash="dot", line_color="orange", row=2, col=1)
-    fig.add_hline(y=PSI_ALERT, line_dash="dash", line_color="red", row=2, col=1)
+    _add_period_lines(fig, counts, normalize=True, row=1, col=1)
+    _add_period_lines(fig, psi.rename("PSI"), color="#1f2937", row=2, col=1)
+    _add_thresholds(fig, PSI_THRESHOLDS, annotate=False, row=2, col=1)
 
     fig.update_layout(height=height, title=f"PSI-обзор: {feature}", legend=dict(title="Бин / PSI"))
     fig.update_yaxes(title_text="Доля", row=1, col=1)
